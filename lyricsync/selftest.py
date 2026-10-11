@@ -18,7 +18,10 @@ import traceback
 from pathlib import Path
 
 # (모듈 이름, 설명, 없으면 치명적인가)
+# numpy를 맨 앞에 둔다. 이게 깨지면 torch·faster_whisper·onnxruntime이
+# 전부 연쇄로 실패하는데, 그러면 원인이 어디인지 헷갈린다.
 CHECKS: list[tuple[str, str, bool]] = [
+    ("numpy", "수치 연산 — 아래 대부분이 이것에 의존한다", True),
     ("torch", "PyTorch — Demucs가 쓴다", True),
     ("demucs", "보컬 분리", True),
     ("demucs.separate", "보컬 분리 진입점", True),
@@ -32,14 +35,59 @@ CHECKS: list[tuple[str, str, bool]] = [
 ]
 
 
-def _probe(name: str) -> tuple[bool, str]:
-    """모듈을 실제로 임포트해 본다. 존재 확인만으로는 부족하다."""
+def _probe(name: str) -> tuple[bool, str, str]:
+    """모듈을 실제로 임포트해 본다. 존재 확인만으로는 부족하다.
+
+    반환: (성공 여부, 한 줄 요약, 실패 시 트레이스백)
+
+    트레이스백까지 돌려주는 이유: "cannot load module more than once"
+    같은 오류는 메시지만으로는 어느 확장 모듈이 중복 적재됐는지 알 수 없다.
+    한 번 추측으로 고치려다 사이클을 낭비했다.
+    """
     try:
         module = importlib.import_module(name)
     except Exception as exc:
-        return False, f"{type(exc).__name__}: {exc}"
+        return False, f"{type(exc).__name__}: {exc}", traceback.format_exc()
     version = getattr(module, "__version__", "")
-    return True, str(version) if version else "ok"
+    where = getattr(module, "__file__", "") or "(내장)"
+    return True, f"{version or 'ok'}  @ {where}", ""
+
+
+def _duplicate_extensions(limit: int = 15) -> list[str]:
+    """번들 안에 같은 이름의 확장 모듈이 두 벌 이상 있는지 찾는다.
+
+    "cannot load module more than once per process"의 전형적 원인이
+    같은 .pyd가 두 경로에 들어간 것이라, 그걸 직접 확인한다.
+    """
+    from .runtime import bundle_dir
+
+    root = bundle_dir()
+    if root is None:
+        return ["(번들 실행이 아니라 생략)"]
+
+    seen: dict[str, list[str]] = {}
+    try:
+        for path in root.rglob("*"):
+            if path.suffix.lower() not in (".pyd", ".so", ".dll"):
+                continue
+            seen.setdefault(path.name.lower(), []).append(
+                str(path.relative_to(root))
+            )
+    except OSError as exc:
+        return [f"(검사 실패: {exc})"]
+
+    dupes = {k: v for k, v in seen.items() if len(v) > 1}
+    if not dupes:
+        return [f"중복 없음 (확장 모듈 {len(seen)}개 확인)"]
+
+    out = [f"중복 {len(dupes)}건 발견 (확장 모듈 {len(seen)}개 중):"]
+    for name, paths in sorted(dupes.items())[:limit]:
+        out.append(f"  {name}")
+        for p in paths[:4]:
+            out.append(f"    - {p}")
+    if len(dupes) > limit:
+        out.append(f"  … 외 {len(dupes) - limit}건")
+    return out
 
 
 def run(out_path: str | None = None) -> int:
@@ -62,8 +110,9 @@ def run(out_path: str | None = None) -> int:
     if not ok_ffmpeg:
         fatal.append("ffmpeg")
 
+    traces: list[tuple[str, str]] = []
     for name, desc, required in CHECKS:
-        ok, detail = _probe(name)
+        ok, detail, tb = _probe(name)
         if ok:
             tag = "OK "
         elif required:
@@ -73,6 +122,27 @@ def run(out_path: str | None = None) -> int:
             tag = "WARN"
             warn.append(name)
         lines.append(f"[{tag}] {name} — {desc} :: {detail}")
+        if tb:
+            traces.append((name, tb))
+
+    # 실패가 있으면 원인을 짚을 재료를 남긴다. 메시지만으로는 부족하다.
+    if traces:
+        lines.append("")
+        lines.append("=" * 60)
+        lines.append("진단 정보")
+        lines.append("=" * 60)
+        lines.append("")
+        lines.append("[번들 내 중복 확장 모듈]")
+        lines.extend(_duplicate_extensions())
+        lines.append("")
+        lines.append("[sys.path]")
+        for entry in sys.path[:12]:
+            lines.append(f"  {entry}")
+        lines.append("")
+        for name, tb in traces[:4]:
+            lines.append(f"[{name} 실패 트레이스백]")
+            lines.extend("  " + ln for ln in tb.rstrip().splitlines()[-14:])
+            lines.append("")
 
     lines.append("")
     if fatal:
