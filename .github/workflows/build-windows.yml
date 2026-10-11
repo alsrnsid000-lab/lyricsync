@@ -53,6 +53,8 @@ jobs:
             throw "ffmpeg.exe not found"
           }
 
+                    "$PWD\packaging\ffmpeg" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
       - name: Run tests
         run: |
           python tests/test_align.py
