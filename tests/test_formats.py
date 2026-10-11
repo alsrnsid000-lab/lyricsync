@@ -8,7 +8,9 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import _harness
 from lyricsync.align import TimedLine, Word
 from lyricsync.formats import (
     lrc_time,
@@ -143,15 +145,4 @@ def test_empty_lines():
 
 
 if __name__ == "__main__":
-    tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
-    print(f"출력 포맷 테스트 {len(tests)}건\n")
-    failed = 0
-    for fn in tests:
-        try:
-            fn()
-        except AssertionError as exc:
-            failed += 1
-            print(f"  [FAIL] {fn.__name__}: {exc}")
-    print()
-    print("전부 통과" if not failed else f"{failed}건 실패")
-    sys.exit(1 if failed else 0)
+    _harness.main(globals(), "출력 포맷 테스트")

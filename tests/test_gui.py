@@ -15,6 +15,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import _harness
 import stub_tk
 
 MB, FD = stub_tk.install()  # lyricsync.gui 임포트 전에 심어야 한다
@@ -38,6 +39,7 @@ def fake_asr(audio, **kwargs):
 
 
 def make_audio(path: Path, seconds: float = 20.0) -> Path:
+    _harness.require_tool("ffmpeg")
     subprocess.run(
         ["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi",
          "-i", "anullsrc=r=44100:cl=stereo", "-t", str(seconds), str(path)],
@@ -337,15 +339,4 @@ def test_close_while_running_asks():
 
 
 if __name__ == "__main__":
-    tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
-    print(f"GUI 로직 테스트 {len(tests)}건 (가짜 tkinter)\n")
-    failed = 0
-    for fn in tests:
-        try:
-            fn()
-        except AssertionError as exc:
-            failed += 1
-            print(f"  [FAIL] {fn.__name__}: {exc}")
-    print()
-    print("전부 통과" if not failed else f"{failed}건 실패")
-    sys.exit(1 if failed else 0)
+    _harness.main(globals(), "GUI 로직 테스트 (가짜 tkinter)")

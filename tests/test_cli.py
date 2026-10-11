@@ -12,7 +12,9 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import _harness
 from lyricsync import asr, cli, pipeline
 from lyricsync.align import Word
 
@@ -34,6 +36,7 @@ FAKE_WORDS = [
 
 
 def make_audio(path: Path, seconds: float = 20.0) -> Path:
+    _harness.require_tool("ffmpeg")
     """ffmpeg로 무음 wav 생성. 전처리 경로를 진짜로 통과시키기 위한 것."""
     subprocess.run(
         [
@@ -219,15 +222,4 @@ def test_help_runs():
 
 
 if __name__ == "__main__":
-    tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
-    print(f"CLI 통합 테스트 {len(tests)}건\n")
-    failed = 0
-    for fn in tests:
-        try:
-            fn()
-        except AssertionError as exc:
-            failed += 1
-            print(f"  [FAIL] {fn.__name__}: {exc}")
-    print()
-    print("전부 통과" if not failed else f"{failed}건 실패")
-    sys.exit(1 if failed else 0)
+    _harness.main(globals(), "CLI 통합 테스트")
