@@ -2,8 +2,12 @@
 #
 #   pyinstaller packaging/lyricsync.spec --noconfirm
 #
-# onedir로 묶는다. onefile은 실행할 때마다 2GB를 임시 폴더에 전부 풀기 때문에
-# 시작에 몇 분이 걸린다 — 이 크기에서는 쓸 수 없다.
+# onedir로 묶는다. onefile은 실행할 때마다 전부 임시 폴더에 풀기 때문에
+# 이 크기에서는 시작이 너무 느리다.
+#
+# 설계 원칙: 용량보다 동작이 우선이다. 한 번 excludes로 setuptools를 뺐다가
+# pkg_resources가 jaraco를 못 찾아 앱이 아예 안 떴다. 빼서 줄어드는 수십 MB는
+# 못 뜨는 앱을 정당화하지 못한다.
 
 import sys
 from pathlib import Path
@@ -17,53 +21,69 @@ from PyInstaller.utils.hooks import (
 ROOT = Path(SPECPATH).parent
 NAME = "lyricsync"
 
-# --- torch / demucs / whisper 가 숨겨 들고 오는 것들 --------------------
-# 이 라이브러리들은 런타임에 문자열로 모듈을 임포트하거나 데이터 파일을
-# 읽기 때문에, PyInstaller의 정적 분석만으로는 전부 못 잡는다.
-
 hidden = []
 datas = []
 binaries = []
+problems = []
 
-for pkg in ("demucs", "torch", "torchaudio", "faster_whisper", "whisper", "whisperx"):
+
+def safe(label, fn, pkg, sink):
+    """수집 실패를 삼키지 않고 기록한다.
+
+    전에는 except: pass 였는데, 그래서 torch 수집이 실패해도 빌드가 조용히
+    '성공'했다. 실패는 빌드 로그에 남겨야 다음에 알아챌 수 있다.
+    """
     try:
-        hidden += collect_submodules(pkg)
-    except Exception:
-        pass  # 설치되지 않은 백엔드는 조용히 건너뛴다
+        items = fn(pkg)
+        if items:
+            sink.extend(items)
+        print(f"[spec] {label:18} {pkg:20} {len(items)}개")
+        return len(items)
+    except Exception as exc:
+        problems.append(f"{label}({pkg}): {type(exc).__name__}: {exc}")
+        print(f"[spec] {label:18} {pkg:20} 실패 — {exc}")
+        return 0
 
-for pkg in (
-    "demucs",          # 모델 정의(remote/*.yaml)와 가중치 URL 목록
-    "torchaudio",
-    "faster_whisper",  # VAD용 onnx 모델(silero)
-    "whisper",         # mel_filters.npz, 토크나이저
-    "whisperx",
-    "lightning_fabric",
-    "transformers",
-):
-    try:
-        datas += collect_data_files(pkg)
-    except Exception:
-        pass
 
-for pkg in ("torch", "torchaudio", "ctranslate2", "onnxruntime"):
-    try:
-        binaries += collect_dynamic_libs(pkg)
-    except Exception:
-        pass
+# --- 핵심 패키지 --------------------------------------------------------
+# 이 셋은 지연 임포트(함수 안에서 import)라서 PyInstaller의 정적 분석이
+# 절대 못 찾는다. 반드시 명시해야 한다.
+CORE = ["torch", "demucs", "faster_whisper"]
+OPTIONAL = ["torchaudio", "whisper", "whisperx"]
 
-# dora/omegaconf는 demucs가 설정을 읽을 때 쓰는데 이름으로만 임포트한다
+for pkg in CORE + OPTIONAL:
+    safe("collect_submodules", collect_submodules, pkg, hidden)
+
+for pkg in CORE + OPTIONAL + ["lightning_fabric", "transformers", "pkg_resources"]:
+    safe("collect_data_files", collect_data_files, pkg, datas)
+
+for pkg in ["torch", "torchaudio", "ctranslate2", "onnxruntime"]:
+    safe("collect_dynamic_libs", collect_dynamic_libs, pkg, binaries)
+
+# --- 이름으로만 임포트되는 것들 -----------------------------------------
 hidden += [
+    # demucs가 설정을 읽을 때 쓴다
     "dora", "dora.log", "omegaconf", "julius", "einops", "openunmix",
-    "soundfile", "soxr", "av", "ctranslate2", "onnxruntime",
-    "tokenizers", "sentencepiece", "regex", "tqdm",
-    "scipy.special", "sklearn.utils._typedefs",
-    "lyricsync.gui", "lyricsync.cli", "lyricsync.pipeline",
+    "demucs.separate", "demucs.apply", "demucs.pretrained",
+    # 오디오 입출력
+    "soundfile", "soxr", "av",
+    # faster-whisper 백엔드
+    "ctranslate2", "onnxruntime", "tokenizers", "sentencepiece",
+    # pkg_resources가 런타임에 끌어오는 vendored 의존성.
+    # 이게 없으면 앱이 아예 못 뜬다 (ModuleNotFoundError: jaraco).
+    "pkg_resources", "setuptools",
+    "jaraco", "jaraco.text", "jaraco.functools", "jaraco.context",
+    "jaraco.collections", "jaraco.structures",
+    "more_itertools", "platformdirs", "backports", "backports.tarfile",
+    # 기타
+    "regex", "tqdm", "scipy.special", "sklearn.utils._typedefs",
+    # 우리 모듈 (지연 임포트)
+    "lyricsync.gui", "lyricsync.cli", "lyricsync.pipeline", "lyricsync.selftest",
 ]
-hidden = sorted(set(hidden))
+hidden = sorted(set(h for h in hidden if h))
 
 # --- ffmpeg 번들 --------------------------------------------------------
-# 받는 사람 PC에 ffmpeg가 있다고 가정할 수 없으므로 같이 넣는다.
-# CI가 packaging/ffmpeg/ 에 미리 내려받아 둔다.
+# 받는 사람 PC에 ffmpeg가 있다고 가정할 수 없다. CI가 미리 내려받아 둔다.
 ffmpeg_dir = ROOT / "packaging" / "ffmpeg"
 ffmpeg_files = []
 if ffmpeg_dir.is_dir():
@@ -72,19 +92,24 @@ if ffmpeg_dir.is_dir():
         if path.is_file():
             ffmpeg_files.append((str(path), "ffmpeg"))
 if not ffmpeg_files:
-    print("*** 경고: packaging/ffmpeg/ 에 ffmpeg 실행 파일이 없습니다.")
-    print("***       빌드는 되지만 받는 사람이 음원을 열 수 없습니다.")
+    print("[spec] *** 경고: packaging/ffmpeg/ 에 실행 파일이 없습니다.")
+    print("[spec] ***       빌드는 되지만 받는 사람이 음원을 열 수 없습니다.")
 datas += ffmpeg_files
 
-# --- 빼도 되는 무거운 것들 ---------------------------------------------
-# 묶지 않아도 동작하는데 용량만 잡아먹는 것들. 300~500MB 정도 줄어든다.
+# --- 제외 ---------------------------------------------------------------
+# 확실히 안 쓰는 것만 뺀다. setuptools, unittest, torch 하위 모듈은
+# 다른 라이브러리가 런타임에 몰래 임포트하는 사례가 있어 건드리지 않는다.
 excludes = [
-    "tkinter.test", "test", "unittest", "pydoc_data",
     "matplotlib", "pandas", "IPython", "notebook", "jupyter",
-    "pytest", "setuptools", "pip", "wheel",
-    "torch.distributions", "torch.testing", "torch.utils.tensorboard",
-    "torch.onnx", "tensorboard", "sympy.plotting",
+    "pytest", "tensorboard", "tkinter.test", "pydoc_data",
 ]
+
+print(f"[spec] hiddenimports {len(hidden)}개 · datas {len(datas)}개 "
+      f"· binaries {len(binaries)}개")
+if problems:
+    print("[spec] *** 수집 실패 항목:")
+    for line in problems:
+        print(f"[spec] ***   {line}")
 
 
 a = Analysis(
