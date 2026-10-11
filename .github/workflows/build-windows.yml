@@ -34,14 +34,21 @@ jobs:
 
       - name: Install lyricsync dependencies
         run: |
-          pip install faster-whisper demucs
+          pip install faster-whisper demucs soundfile
           pip install pyinstaller==6.11.1
 
+      # numpy 버전은 꼭 찍어둔다. numpy 2.x가 번들에서 중복 적재되면
+      # "cannot load module more than once per process"로 torch가 죽는데,
+      # 그때 버전을 알아야 원인을 짚을 수 있다.
       - name: Show environment
         run: |
-          python -c "import torch, sys; print('torch', torch.__version__, '| python', sys.version)"
-          python -c "import demucs; print('demucs OK')"
+          python -c "import sys; print('python', sys.version)"
+          python -c "import numpy; print('numpy', numpy.__version__)"
+          python -c "import torch; print('torch', torch.__version__)"
+          python -c "import demucs; print('demucs', demucs.__version__)"
           python -c "import faster_whisper; print('faster-whisper OK')"
+          python -c "import ctranslate2; print('ctranslate2', ctranslate2.__version__)"
+          python -c "import soundfile; print('soundfile', soundfile.__version__)"
 
       # --- ffmpeg 번들 ------------------------------------------------
       # 받는 사람 PC에 ffmpeg가 있다고 가정할 수 없으므로 같이 묶는다.
