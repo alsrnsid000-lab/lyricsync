@@ -42,6 +42,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="창을 띄웁니다. 인자 없이 실행해도 같습니다.",
     )
     p.add_argument(
+        "--selftest", nargs="?", const="", metavar="보고서파일",
+        help="번들이 제대로 묶였는지 점검하고 끝냅니다. "
+             "파일 경로를 주면 결과를 그 파일에 씁니다.",
+    )
+    p.add_argument(
         "-l", "--lyrics", type=Path,
         help="가사 텍스트 파일. 주면 글자는 이 파일 그대로 쓰고 시간만 입힙니다. "
              "안 주면 받아쓰기까지 합니다.",
@@ -162,6 +167,13 @@ def run(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     args = build_parser().parse_args(argv)
+
+    # 자가진단은 다른 무엇보다 먼저. 번들이 깨졌는지 보는 게 목적이라
+    # GUI나 음원 처리로 넘어가기 전에 끝낸다.
+    if args.selftest is not None:
+        from .selftest import run as run_selftest
+
+        return run_selftest(args.selftest or None)
 
     # 인자 없이 실행하거나 --gui면 창을 띄운다.
     # exe를 더블클릭하면 인자가 없으므로 이 경로로 들어온다.
