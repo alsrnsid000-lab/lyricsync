@@ -1,0 +1,137 @@
+name: Build Windows
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install torch (CPU only)
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Install lyricsync dependencies
+        run: |
+          pip install faster-whisper demucs
+          pip install pyinstaller==6.11.1
+
+      - name: Show environment
+        run: |
+          python -c "import torch, sys; print('torch', torch.__version__, '| python', sys.version)"
+          python -c "import demucs; print('demucs OK')"
+          python -c "import faster_whisper; print('faster-whisper OK')"
+
+      - name: Fetch ffmpeg
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force -Path packaging\ffmpeg | Out-Null
+          $url = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
+          Invoke-WebRequest -Uri $url -OutFile ffmpeg.zip -UseBasicParsing
+          Expand-Archive ffmpeg.zip -DestinationPath ffmpeg-tmp -Force
+          Get-ChildItem ffmpeg-tmp -Recurse -Include ffmpeg.exe,ffprobe.exe |
+            ForEach-Object { Copy-Item $_.FullName packaging\ffmpeg\ -Force }
+          Get-ChildItem packaging\ffmpeg
+          if (-not (Test-Path packaging\ffmpeg\ffmpeg.exe)) {
+            throw "ffmpeg.exe not found"
+          }
+
+      - name: Run tests
+        run: |
+          python tests/test_align.py
+          python tests/test_formats.py
+          python tests/test_runtime.py
+          python tests/test_cli.py
+          python tests/test_gui.py
+        env:
+          PYTHONIOENCODING: utf-8
+
+      - name: Build with PyInstaller
+        run: pyinstaller packaging/lyricsync.spec --noconfirm --clean
+        env:
+          PYTHONIOENCODING: utf-8
+
+      - name: Verify the build
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          if (-not (Test-Path dist\lyricsync\lyricsync.exe)) {
+            throw "lyricsync.exe was not built"
+          }
+          if (-not (Test-Path dist\lyricsync\_internal\ffmpeg\ffmpeg.exe)) {
+            if (-not (Test-Path dist\lyricsync\ffmpeg\ffmpeg.exe)) {
+              throw "ffmpeg was not bundled"
+            }
+          }
+          $size = (Get-ChildItem dist\lyricsync -Recurse |
+                   Measure-Object -Property Length -Sum).Sum / 1GB
+          Write-Host ("bundle size: {0:N2} GB" -f $size)
+
+      - name: Add README for recipients
+        shell: pwsh
+        run: |
+          Copy-Item README.md dist\lyricsync\README.md -Force
+          @"
+          lyricsync - 가사 싱크 자동 추출
+
+          [실행 방법]
+          이 폴더의 lyricsync.exe 를 더블클릭하세요.
+
+          [중요]
+          폴더 전체를 그대로 두고 쓰세요. lyricsync.exe 만 따로
+          꺼내면 동작하지 않습니다.
+
+          [처음 실행할 때]
+          음성 인식 모델을 자동으로 내려받습니다 (1~3GB, 인터넷 필요).
+          저장 위치: %LOCALAPPDATA%\lyricsync\models
+
+          [문제가 생기면]
+          %LOCALAPPDATA%\lyricsync\error.log 를 확인하세요.
+          "@ | Out-File -FilePath dist\lyricsync\사용법.txt -Encoding utf8
+
+      - name: Zip
+        shell: pwsh
+        run: |
+          Compress-Archive -Path dist\lyricsync\* -DestinationPath "lyricsync-windows-x64.zip"
+          $mb = (Get-Item "lyricsync-windows-x64.zip").Length / 1MB
+          Write-Host ("zip size: {0:N0} MB" -f $mb)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lyricsync-windows-x64
+          path: lyricsync-windows-x64.zip
+          retention-days: 30
+          compression-level: 0
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: lyricsync-windows-x64.zip
+          body: |
+            ## 받는 분께
+
+            `lyricsync-windows-x64.zip` 을 내려받아 **압축을 풀고**
+            `lyricsync.exe` 를 더블클릭하세요.
+
+            - 폴더 전체를 그대로 두고 쓰세요. exe만 꺼내면 동작하지 않습니다.
+            - 처음 실행할 때 음성 인식 모델을 내려받습니다 (1~3GB, 인터넷 필요).
+            - 윈도우 10/11 64비트. 설치 과정은 없습니다.
+            - SmartScreen 경고가 뜨면 "추가 정보 → 실행"을 누르세요.
