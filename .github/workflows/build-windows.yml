@@ -37,6 +37,15 @@ jobs:
           pip install faster-whisper demucs soundfile
           pip install pyinstaller==6.11.1
 
+      # numpy 2.4+는 PyInstaller 번들 안에서 확장 모듈이 두 번 적재될 때
+      # "cannot load module more than once per process"를 내고, 그러면
+      # torch·faster-whisper·onnxruntime이 전부 연쇄로 죽는다.
+      # numpy 1.x로 내리면 torch 휠이 numpy 2 ABI로 빌드돼 있어 또 깨지므로,
+      # 2.x 계열을 유지하되 문제 버전 아래로 고정한다.
+      # 이 단계는 맨 뒤에 둔다. 앞 설치들이 numpy를 다시 올려버리기 때문이다.
+      - name: Pin numpy below the broken release
+        run: pip install "numpy>=2.0,<2.4"
+
       # numpy 버전은 꼭 찍어둔다. numpy 2.x가 번들에서 중복 적재되면
       # "cannot load module more than once per process"로 torch가 죽는데,
       # 그때 버전을 알아야 원인을 짚을 수 있다.
