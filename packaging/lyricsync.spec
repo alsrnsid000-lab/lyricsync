@@ -54,6 +54,7 @@ for pkg in ("demucs", "faster_whisper"):
 # 그래서 이름을 여기 적어야 PyInstaller가 알고, 각 패키지의 공식 훅이 돈다.
 hidden = [
     # 핵심 — 이게 빠지면 아무것도 안 된다
+    "numpy",
     "torch",
     "demucs", "demucs.separate", "demucs.apply", "demucs.pretrained",
     "faster_whisper", "ctranslate2",

@@ -53,6 +53,57 @@ def _probe(name: str) -> tuple[bool, str, str]:
     return True, f"{version or 'ok'}  @ {where}", ""
 
 
+def _boot_info() -> list[str]:
+    """진입점이 남긴 시작 시점 기록을 읽는다 (packaging/entry.py 참고)."""
+    info = getattr(sys, "_lyricsync_boot", None)
+    if not info:
+        return ["(기록 없음 — 번들 진입점을 거치지 않았습니다)"]
+
+    out = []
+    pre = info.get("already_loaded") or []
+    if pre:
+        out.append(f"  우리 코드가 돌기 전에 이미 적재됨: {', '.join(pre)}")
+        out.append("  → 이게 numpy 중복 초기화의 원인입니다.")
+    else:
+        out.append("  우리 코드가 첫 번째 적재자였습니다 (선점한 모듈 없음)")
+
+    if "numpy_version" in info:
+        out.append(f"  시작 시 numpy {info['numpy_version']} 적재 성공")
+        out.append(f"    {info.get('numpy_file', '?')}")
+    if "numpy_error" in info:
+        out.append(f"  시작 시 numpy 적재 실패: {info['numpy_error']}")
+        tb = (info.get("numpy_traceback") or "").rstrip().splitlines()
+        out.extend("    " + ln for ln in tb[-10:])
+    return out
+
+
+def _numpy_layout() -> list[str]:
+    """번들 안 numpy가 어떻게 놓였는지 본다.
+
+    numpy 2.x는 구버전 호환용 numpy/core/ 와 실제 numpy/_core/ 를 둘 다
+    갖고 있다. 양쪽에 같은 확장 모듈이 들어가면 두 번 적재된다.
+    """
+    from .runtime import bundle_dir
+
+    root = bundle_dir()
+    if root is None:
+        return ["(번들 실행이 아니라 생략)"]
+
+    out = []
+    for sub in ("numpy", "numpy/core", "numpy/_core"):
+        path = root / sub
+        if not path.is_dir():
+            out.append(f"  {sub}/ — 없음")
+            continue
+        try:
+            exts = sorted(p.name for p in path.glob("*.pyd")) + \
+                   sorted(p.name for p in path.glob("*.so"))
+        except OSError:
+            exts = []
+        out.append(f"  {sub}/ — 확장 모듈 {len(exts)}개 {exts[:6]}")
+    return out
+
+
 def _duplicate_extensions(limit: int = 15) -> list[str]:
     """번들 안에 같은 이름의 확장 모듈이 두 벌 이상 있는지 찾는다.
 
@@ -131,6 +182,12 @@ def run(out_path: str | None = None) -> int:
         lines.append("=" * 60)
         lines.append("진단 정보")
         lines.append("=" * 60)
+        lines.append("")
+        lines.append("[시작 시점 상태 — numpy를 누가 먼저 적재했나]")
+        lines.extend(_boot_info())
+        lines.append("")
+        lines.append("[번들 내 numpy 배치]")
+        lines.extend(_numpy_layout())
         lines.append("")
         lines.append("[번들 내 중복 확장 모듈]")
         lines.extend(_duplicate_extensions())

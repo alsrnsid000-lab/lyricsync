@@ -77,10 +77,52 @@ def _report_crash(exc: BaseException) -> None:
         pass
 
 
+def _tame_openmp() -> None:
+    """OpenMP 런타임이 두 벌일 때 죽지 않게 한다.
+
+    번들에 libiomp5md.dll이 ctranslate2와 torch 양쪽에 들어간다. 둘 다
+    적재되면 Intel OpenMP가 중복을 감지하고 프로세스를 중단시킨다.
+    한쪽을 빼면 그쪽 라이브러리가 DLL을 못 찾으므로, 중복을 허용하는
+    공식 환경변수를 쓴다.
+    """
+    os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+    # 스레드 폭주 방지. 번들에서 BLAS가 코어 수만큼 스레드를 띄우면
+    # 초기화 단계에서 교착이 생기는 사례가 있다.
+    os.environ.setdefault("OMP_NUM_THREADS", "4")
+
+
+def _boot_numpy() -> None:
+    """numpy를 가장 먼저, 한 번만 적재하고 그 과정을 기록한다.
+
+    "CPU dispatcher tracer already initlized"는 numpy의 C 확장이 한
+    프로세스에서 두 번 초기화될 때 나온다. 우리 코드가 첫 import를 하는데도
+    그 오류가 났다면, 그 전에 누군가 이미 적재했다는 뜻이다. 그게 누구인지
+    알아야 고칠 수 있어서, 여기서 전후 상태를 남긴다.
+    """
+    import traceback as _tb
+
+    watched = (
+        "numpy", "numpy._core", "numpy._core._multiarray_umath",
+        "numpy.core", "torch", "ctranslate2", "pkg_resources",
+    )
+    info = {"already_loaded": [m for m in watched if m in sys.modules]}
+    try:
+        import numpy
+
+        info["numpy_version"] = getattr(numpy, "__version__", "?")
+        info["numpy_file"] = getattr(numpy, "__file__", "?")
+    except BaseException as exc:
+        info["numpy_error"] = f"{type(exc).__name__}: {exc}"
+        info["numpy_traceback"] = _tb.format_exc()
+    sys._lyricsync_boot = info  # type: ignore[attr-defined]
+
+
 def main() -> int:
     # 반드시 다른 무엇보다 먼저. 아래 import들이 print를 할 수 있다.
     multiprocessing.freeze_support()
     _guard_streams()
+    _tame_openmp()
+    _boot_numpy()
 
     try:
         from lyricsync.cli import main as cli_main
