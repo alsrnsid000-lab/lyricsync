@@ -2,85 +2,77 @@
 #
 #   pyinstaller packaging/lyricsync.spec --noconfirm
 #
-# onedir로 묶는다. onefile은 실행할 때마다 전부 임시 폴더에 풀기 때문에
-# 이 크기에서는 시작이 너무 느리다.
+# 설계 원칙 — 두 번의 실패에서 배운 것:
 #
-# 설계 원칙: 용량보다 동작이 우선이다. 한 번 excludes로 setuptools를 뺐다가
-# pkg_resources가 jaraco를 못 찾아 앱이 아예 안 떴다. 빼서 줄어드는 수십 MB는
-# 못 뜨는 앱을 정당화하지 못한다.
+# 1. 용량보다 동작이 우선이다.
+#    excludes로 setuptools를 뺐더니 pkg_resources가 jaraco를 못 찾아
+#    앱이 아예 안 떴다. 아껴지는 수십 MB가 못 뜨는 앱을 정당화하지 못한다.
+#
+# 2. 과하게 긁어모으지 않는다.
+#    collect_submodules("torch")로 1800개를 끌어왔더니 numpy가 중복 적재되어
+#    "cannot load module more than once per process"로 torch가 죽었다.
+#    PyInstaller는 torch/numpy/faster_whisper 전용 훅을 이미 갖고 있다.
+#    hiddenimports에 최상위 이름만 적어서 훅이 돌게 하는 편이 안전하다.
+#
+# 그래서 여기서는 '지연 임포트라 정적 분석이 못 보는 것'만 이름으로 알려주고,
+# 실제 수집은 PyInstaller 훅에 맡긴다.
 
-import sys
 from pathlib import Path
 
-from PyInstaller.utils.hooks import (
-    collect_data_files,
-    collect_dynamic_libs,
-    collect_submodules,
-)
+from PyInstaller.utils.hooks import collect_data_files
 
 ROOT = Path(SPECPATH).parent
 NAME = "lyricsync"
 
-hidden = []
 datas = []
-binaries = []
 problems = []
 
 
-def safe(label, fn, pkg, sink):
-    """수집 실패를 삼키지 않고 기록한다.
+def add_data(pkg):
+    """패키지의 데이터 파일을 모은다. 실패는 삼키지 않고 기록한다.
 
-    전에는 except: pass 였는데, 그래서 torch 수집이 실패해도 빌드가 조용히
+    전에는 except: pass 였고, 그래서 수집이 실패해도 빌드가 조용히
     '성공'했다. 실패는 빌드 로그에 남겨야 다음에 알아챌 수 있다.
     """
     try:
-        items = fn(pkg)
-        if items:
-            sink.extend(items)
-        print(f"[spec] {label:18} {pkg:20} {len(items)}개")
-        return len(items)
+        items = collect_data_files(pkg)
+        datas.extend(items)
+        print(f"[spec] data {pkg:18} {len(items)}개")
     except Exception as exc:
-        problems.append(f"{label}({pkg}): {type(exc).__name__}: {exc}")
-        print(f"[spec] {label:18} {pkg:20} 실패 — {exc}")
-        return 0
+        problems.append(f"{pkg}: {type(exc).__name__}: {exc}")
+        print(f"[spec] data {pkg:18} 실패 — {exc}")
 
 
-# --- 핵심 패키지 --------------------------------------------------------
-# 이 셋은 지연 임포트(함수 안에서 import)라서 PyInstaller의 정적 분석이
-# 절대 못 찾는다. 반드시 명시해야 한다.
-CORE = ["torch", "demucs", "faster_whisper"]
-OPTIONAL = ["torchaudio", "whisper", "whisperx"]
+# 코드가 아니라 '파일'이 필요한 것들.
+#   demucs         remote/*.yaml — 모델 정의와 가중치 URL 목록
+#   faster_whisper assets/ — 음성 구간 검출(VAD)용 onnx
+for pkg in ("demucs", "faster_whisper"):
+    add_data(pkg)
 
-for pkg in CORE + OPTIONAL:
-    safe("collect_submodules", collect_submodules, pkg, hidden)
-
-for pkg in CORE + OPTIONAL + ["lightning_fabric", "transformers", "pkg_resources"]:
-    safe("collect_data_files", collect_data_files, pkg, datas)
-
-for pkg in ["torch", "torchaudio", "ctranslate2", "onnxruntime"]:
-    safe("collect_dynamic_libs", collect_dynamic_libs, pkg, binaries)
-
-# --- 이름으로만 임포트되는 것들 -----------------------------------------
-hidden += [
-    # demucs가 설정을 읽을 때 쓴다
+# --- 지연 임포트라 정적 분석이 못 보는 것들 -----------------------------
+# ASR과 보컬 분리는 함수 안에서 import 한다(앱 시작을 빠르게 하려고).
+# 그래서 이름을 여기 적어야 PyInstaller가 알고, 각 패키지의 공식 훅이 돈다.
+hidden = [
+    # 핵심 — 이게 빠지면 아무것도 안 된다
+    "torch",
+    "demucs", "demucs.separate", "demucs.apply", "demucs.pretrained",
+    "faster_whisper", "ctranslate2",
+    # demucs가 설정을 읽을 때 이름으로 임포트한다
     "dora", "dora.log", "omegaconf", "julius", "einops", "openunmix",
-    "demucs.separate", "demucs.apply", "demucs.pretrained",
     # 오디오 입출력
-    "soundfile", "soxr", "av",
-    # faster-whisper 백엔드
-    "ctranslate2", "onnxruntime", "tokenizers", "sentencepiece",
+    "torchaudio", "soundfile", "soxr",
+    # 음성 구간 검출
+    "onnxruntime", "tokenizers",
     # pkg_resources가 런타임에 끌어오는 vendored 의존성.
     # 이게 없으면 앱이 아예 못 뜬다 (ModuleNotFoundError: jaraco).
     "pkg_resources", "setuptools",
     "jaraco", "jaraco.text", "jaraco.functools", "jaraco.context",
-    "jaraco.collections", "jaraco.structures",
+    "jaraco.collections",
     "more_itertools", "platformdirs", "backports", "backports.tarfile",
-    # 기타
-    "regex", "tqdm", "scipy.special", "sklearn.utils._typedefs",
-    # 우리 모듈 (지연 임포트)
-    "lyricsync.gui", "lyricsync.cli", "lyricsync.pipeline", "lyricsync.selftest",
+    # 우리 모듈 (cli가 상황에 따라 늦게 불러온다)
+    "lyricsync.gui", "lyricsync.pipeline", "lyricsync.selftest",
 ]
-hidden = sorted(set(h for h in hidden if h))
+hidden = sorted(set(hidden))
 
 # --- ffmpeg 번들 --------------------------------------------------------
 # 받는 사람 PC에 ffmpeg가 있다고 가정할 수 없다. CI가 미리 내려받아 둔다.
@@ -97,15 +89,15 @@ if not ffmpeg_files:
 datas += ffmpeg_files
 
 # --- 제외 ---------------------------------------------------------------
-# 확실히 안 쓰는 것만 뺀다. setuptools, unittest, torch 하위 모듈은
-# 다른 라이브러리가 런타임에 몰래 임포트하는 사례가 있어 건드리지 않는다.
+# 확실히 안 쓰는 것만. setuptools와 torch 하위 모듈은 다른 라이브러리가
+# 런타임에 몰래 임포트하는 사례가 있어 건드리지 않는다.
 excludes = [
     "matplotlib", "pandas", "IPython", "notebook", "jupyter",
     "pytest", "tensorboard", "tkinter.test", "pydoc_data",
 ]
 
-print(f"[spec] hiddenimports {len(hidden)}개 · datas {len(datas)}개 "
-      f"· binaries {len(binaries)}개")
+print(f"[spec] hiddenimports {len(hidden)}개 · datas {len(datas)}개")
+print("[spec] binaries는 PyInstaller 훅에 맡깁니다 (직접 모으면 numpy가 중복됩니다)")
 if problems:
     print("[spec] *** 수집 실패 항목:")
     for line in problems:
@@ -115,7 +107,7 @@ if problems:
 a = Analysis(
     [str(ROOT / "packaging" / "entry.py")],
     pathex=[str(ROOT)],
-    binaries=binaries,
+    binaries=[],          # torch/onnxruntime DLL은 각자의 공식 훅이 가져온다
     datas=datas,
     hiddenimports=hidden,
     hookspath=[],
