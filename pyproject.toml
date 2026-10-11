@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lyricsync"
+version = "0.1.0"
+description = "음원에서 가사 타임스탬프(LRC/SRT)를 자동으로 뽑는 CLI"
+requires-python = ">=3.10"
+# 런타임 의존성은 일부러 비워뒀다. ASR 백엔드는 셋 중 하나만 고르면 되고,
+# torch 계열은 CPU/CUDA 빌드가 갈려서 자동 설치가 오히려 방해가 된다.
+dependencies = []
+
+[project.optional-dependencies]
+# 정확도 우선
+accurate = ["whisperx", "demucs"]
+# 속도 우선
+fast = ["faster-whisper", "demucs"]
+# 윈도우 exe 빌드용
+build = ["pyinstaller>=6.11"]
+
+[project.scripts]
+lyricsync = "lyricsync.cli:main"
+
+[project.gui-scripts]
+# 콘솔 창 없이 실행되는 진입점 (윈도우에서 lyricsync-gui.exe)
+lyricsync-gui = "lyricsync.cli:main"
+
+[tool.setuptools]
+packages = ["lyricsync"]
