@@ -169,8 +169,42 @@ def test_collect_builds_options():
         assert opts.language == "en", opts.language   # 표시 이름 -> 코드
         assert opts.offset == -0.4
         assert opts.word_level is True
-        assert opts.separate is True
+        # 보컬 분리는 Demucs가 깔려 있을 때만 켜진다
+        assert opts.separate is gui.separation_available()
     print("  옵션 수집 OK")
+
+
+def test_separation_checkbox_reflects_availability():
+    """Demucs가 없으면 체크박스를 잠그고 이유를 보여줘야 한다.
+
+    배포 exe에는 보컬 분리가 없다. 눌러도 아무 일이 없는 체크박스를
+    남겨두면 사용자는 켰다고 믿고 결과를 오해한다.
+    """
+    orig = gui.separation_available
+
+    gui.separation_available = lambda: False
+    try:
+        app = fresh_app()
+        assert app.sep_var.get() is False
+        assert app.sep_check.cget("state") == "disabled"
+        assert "포함되지 않" in app.sep_check.cget("text"), app.sep_check.cget("text")
+        app._drain()   # 환경 점검 로그는 큐를 거쳐 위젯에 들어간다
+        log = "".join(app.log._kw.get("_text", []))
+        assert "보컬 분리: 없음" in log, log
+    finally:
+        gui.separation_available = orig
+
+    gui.separation_available = lambda: True
+    try:
+        app = fresh_app()
+        assert app.sep_var.get() is True
+        assert app.sep_check.cget("state") == "normal"
+        app._drain()
+        log = "".join(app.log._kw.get("_text", []))
+        assert "보컬 분리: 사용 가능" in log, log
+    finally:
+        gui.separation_available = orig
+    print("  보컬 분리 가용성 반영 OK")
 
 
 def test_collect_asks_before_overwrite():

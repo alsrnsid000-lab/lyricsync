@@ -21,6 +21,7 @@ except ImportError as exc:  # 헤드리스 리눅스 등
 
 from . import __version__
 from .asr import INSTALL_HINT, detect_backend
+from .audio import SEPARATION_HINT, separation_available
 from .pipeline import (
     Cancelled,
     STAGES,
@@ -162,12 +163,25 @@ class App:
             obox, text="초. 가사가 늦게 뜨면 음수로 (예: -0.3)", foreground="#555"
         ).grid(row=2, column=2, columnspan=2, sticky="w", padx=8)
 
-        self.sep_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(
+        # 보컬 분리는 Demucs가 깔려 있을 때만 쓸 수 있다. 배포 exe에는 없다.
+        can_separate = separation_available()
+        self.sep_var = tk.BooleanVar(value=can_separate)
+        self.sep_check = ttk.Checkbutton(
             obox,
-            text="보컬 분리 (느리지만 인식률이 크게 올라갑니다 — 권장)",
+            text=("보컬 분리 (느리지만 인식률이 크게 올라갑니다 — 권장)"
+                  if can_separate else
+                  "보컬 분리 — 이 버전에는 포함되지 않았습니다"),
             variable=self.sep_var,
-        ).grid(row=3, column=0, columnspan=4, sticky="w", padx=8, pady=(6, 0))
+            state="normal" if can_separate else "disabled",
+        )
+        self.sep_check.grid(row=3, column=0, columnspan=4, sticky="w",
+                            padx=8, pady=(6, 0))
+        if not can_separate:
+            ttk.Label(
+                obox,
+                text="가사 파일을 함께 넣으면 글자는 그대로 유지되므로 영향이 작습니다.",
+                foreground="#555",
+            ).grid(row=4, column=0, columnspan=4, sticky="w", padx=26)
 
         # --- 실행 ---
         run_row = ttk.Frame(main)
@@ -226,6 +240,11 @@ class App:
         else:
             self._put(("log", "음성 인식 백엔드를 찾을 수 없습니다", "error"))
             self._put(("log", INSTALL_HINT.strip(), "dim"))
+
+        if separation_available():
+            self._put(("log", "보컬 분리: 사용 가능 (Demucs)", "ok"))
+        else:
+            self._put(("log", "보컬 분리: 없음 — 반주가 깔린 채로 인식합니다", "warn"))
 
         self._put(("log", f"모델 저장 위치: {app_data_dir() / 'models'}", "dim"))
         self._put(("log", "", None))
@@ -328,6 +347,8 @@ class App:
             self._append(
                 "보컬 분리를 켰습니다. 3분 곡이면 CPU에서 수 분 걸릴 수 있습니다.", "dim"
             )
+        elif not separation_available() and not opts.lyrics:
+            self._append(SEPARATION_HINT, "warn")
 
         self.worker = threading.Thread(target=self._work, args=(opts,), daemon=True)
         self.worker.start()

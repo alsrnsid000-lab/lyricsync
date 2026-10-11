@@ -28,6 +28,31 @@ class AudioError(RuntimeError):
     """오디오 처리 실패."""
 
 
+def separation_available() -> bool:
+    """보컬 분리를 쓸 수 있는지.
+
+    Demucs는 PyTorch를 끌고 오는데, 윈도우 exe 번들에서는 torch가
+    numpy·OpenMP와 충돌해 앱이 뜨지 않았다. 그래서 배포 exe에는 넣지 않는다.
+    소스로 돌릴 때 `pip install demucs` 되어 있으면 그대로 쓴다.
+
+    실제 import까지 하지는 않는다 — torch 로딩은 수 초가 걸려서 창이 뜨는
+    속도를 체감할 만큼 늦춘다.
+    """
+    from importlib.util import find_spec
+
+    try:
+        return find_spec("demucs") is not None and find_spec("torch") is not None
+    except (ImportError, ValueError):
+        return False
+
+
+SEPARATION_HINT = (
+    "보컬 분리는 이 버전에 포함되지 않았습니다. "
+    "반주가 깔린 채로 인식하므로 받아쓰기 정확도가 낮아질 수 있습니다. "
+    "가사 파일을 함께 넣으면 글자는 그대로 유지되므로 영향이 작습니다."
+)
+
+
 def _run(cmd: list[str]) -> subprocess.CompletedProcess:
     return subprocess.run(
         cmd,
@@ -179,6 +204,10 @@ def prepare(
     duration = probe_duration(src)
     separated = False
     source = src
+
+    if separate and not separation_available():
+        log(f"[주의] {SEPARATION_HINT}")
+        separate = False
 
     if separate:
         try:

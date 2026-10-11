@@ -64,7 +64,7 @@ zip 안에 `사용법.txt`가 같이 들어간다. 요지는 이렇다.
 | **UPX 안 씀** | torch DLL을 UPX로 압축하면 깨지는 사례가 많다. |
 | **`console=False`** | 콘솔 창이 깜빡이지 않는다. 대신 `sys.stdout`이 `None`이 되어 라이브러리 내부 `print` 한 줄이 앱을 죽일 수 있어서, `packaging/entry.py`에서 막아 뒀다. |
 
-결과물은 **압축 약 1.3~1.8GB, 압축 풀면 2~2.5GB**다. 카톡으로는 못 보내니 GitHub Releases 링크나 구글드라이브로 전달해야 한다. 더 작게 가려면 `packaging/lyricsync.spec`의 `excludes`를 늘리거나, Demucs(=torch)를 포기하고 `faster-whisper`만 쓰면 250MB대까지 내려간다.
+결과물은 **압축 약 200~300MB**다. torch를 빼서 이 크기가 됐다.
 
 **SmartScreen 경고** — 코드 서명 인증서가 없어서 "Windows가 PC를 보호했습니다"가 뜬다. "추가 정보 → 실행"을 누르면 된다. 없애려면 유료 코드 서명 인증서(연 20~40만원)가 필요하다.
 
@@ -173,11 +173,12 @@ lyricsync/
   gui.py         tkinter 창
 packaging/
   entry.py       exe 진입점 (스트림 보호, 크래시 로그)
-  lyricsync.spec PyInstaller 설정
+  rthook_numpy.py  numpy를 다른 훅보다 먼저 적재
+  lyricsync.spec PyInstaller 설정 (실패 기록이 주석에 있음)
   ffmpeg/        CI가 ffmpeg.exe를 여기 넣는다
 .github/workflows/
   build-windows.yml  윈도우 자동 빌드 + 릴리스
-tests/            55건
+tests/            57건
 ```
 
 ### 정렬이 동작하는 방식
@@ -206,9 +207,17 @@ python3 tests/test_cli.py        # CLI 종단 8건
 python3 tests/test_gui.py        # GUI 로직 17건
 ```
 
-55건 전부 **Whisper 설치 없이** 돌아간다 (ffmpeg만 필요). `test_cli.py`와 `test_gui.py`는 가짜 ASR을 끼워 넣어 음원 입력부터 파일 출력까지 전 구간 배선을 확인한다. `test_gui.py`는 `stub_tk.py`로 tkinter를 대신해서 디스플레이 없이 창 조립과 입력 검증을 실행한다.
+57건 전부 **Whisper 설치 없이** 돌아간다 (ffmpeg만 필요). `test_cli.py`와 `test_gui.py`는 가짜 ASR을 끼워 넣어 음원 입력부터 파일 출력까지 전 구간 배선을 확인한다. `test_gui.py`는 `stub_tk.py`로 tkinter를 대신해서 디스플레이 없이 창 조립과 입력 검증을 실행한다.
 
 **GUI 외관은 테스트로 검증되지 않는다.** 위젯이 어떻게 보이는지, 한글이 안 깨지는지, 레이아웃이 좁지 않은지는 윈도우에서 직접 띄워 봐야 한다. 빌드가 끝나면 그걸 먼저 확인하는 게 좋다.
+
+## 왜 exe에 보컬 분리가 없나
+
+보컬 분리(Demucs)는 PyTorch를 끌고 오는데, 이걸 faster-whisper(CTranslate2)와 한 exe에 묶으면 윈도우에서 실행이 안 됐다. 네 번 시도한 기록은 `packaging/lyricsync.spec` 상단 주석에 남겼다. 요약하면 OpenMP 런타임이 두 벌 들어가고 numpy의 C 확장이 두 번 초기화되면서 앱이 아예 뜨지 않았다.
+
+보컬 분리는 품질 향상 기능이지 필수가 아니다. 그리고 **주 사용 경로인 "가사 파일 함께 넣기"에서는 손실이 거의 없다** — 그 모드는 ASR에서 시간만 빌려오고 글자는 네 가사를 그대로 쓰기 때문에, 반주 때문에 인식이 좀 흔들려도 타임스탬프는 잘 맞는다. 손해는 가사 없이 받아쓰기할 때뿐이다.
+
+소스로 돌릴 때는 `pip install demucs` 하면 그대로 쓸 수 있고, 프로그램이 알아서 감지한다.
 
 ## 알려진 한계
 
